@@ -1,0 +1,117 @@
+# =============================================================================
+# MockMentorBiz — Production docker-compose
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up --build -d
+#
+# Services:
+#   mysql         – MySQL 8 with persistent volume
+#   backend       – FastAPI (no hot-reload, non-root user)
+#   frontend-prod – nginx: serves built React SPA + proxies /api & /ws to backend
+#
+# All secrets come from the root .env file (never committed).
+# Override any value with environment variables at deploy time.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # MySQL 8
+  # ---------------------------------------------------------------------------
+  mysql:
+    image: mysql:8.0
+    container_name: mockmentorbiz-mysql
+    restart: always
+    env_file:
+      - .env
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-mockmentorbiz}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./database/seed_users.sql:/docker-entrypoint-initdb.d/02_seed_users.sql:ro
+    networks:
+      - mockmentorbiz-network
+    # Do NOT expose port 3306 to host in production
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${MYSQL_USER}", "-p${MYSQL_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # FastAPI backend (production — no hot-reload, non-root user)
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      target: backend
+    container_name: mockmentorbiz-backend
+    restart: always
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      UPLOADS_DIR: /app/uploads
+    # Do NOT expose port 8000 to host; nginx proxies internally
+    expose:
+      - "8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - uploads_data:/app/uploads
+    networks:
+      - mockmentorbiz-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # ---------------------------------------------------------------------------
+  # nginx: serves built React SPA + proxies /api and /ws to backend
+  # ---------------------------------------------------------------------------
+  frontend-prod:
+    build:
+      context: .
+      target: production
+      args:
+        # VITE_* vars are baked into the JS bundle at build time.
+        # In production with nginx proxying, the frontend and backend share
+        # the same origin so relative paths work ("/api" → nginx → backend).
+        VITE_API_BASE_URL: ""
+        VITE_WS_BASE_URL: ""
+        VITE_APP_NAME: ${VITE_APP_NAME:-MockMentorBiz}
+        VITE_APP_VERSION: ${VITE_APP_VERSION:-1.0.0}
+        VITE_ENABLE_VOICE_RECORDING: ${VITE_ENABLE_VOICE_RECORDING:-true}
+        VITE_ENABLE_VIDEO_PROCTORING: ${VITE_ENABLE_VIDEO_PROCTORING:-true}
+        VITE_ENABLE_ANALYTICS: ${VITE_ENABLE_ANALYTICS:-true}
+        VITE_ENABLE_PROCTORING: ${VITE_ENABLE_PROCTORING:-true}
+        VITE_ENABLE_VOICE_FEATURES: ${VITE_ENABLE_VOICE_FEATURES:-true}
+        VITE_DEBUG_MODE: "false"
+        VITE_LOG_LEVEL: "warn"
+        VITE_MAX_FILE_SIZE: ${VITE_MAX_FILE_SIZE:-10485760}
+        VITE_ALLOWED_FILE_TYPES: ${VITE_ALLOWED_FILE_TYPES:-.pdf,.doc,.docx}
+    container_name: mockmentorbiz-frontend-prod
+    restart: always
+    ports:
+      - "80:80"
+      # Port 443 (HTTPS) is not exposed until SSL certificates are configured
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - mockmentorbiz-network
+
+volumes:
+  mysql_data:
+  uploads_data:
+
+networks:
+  mockmentorbiz-network:
+    driver: bridge

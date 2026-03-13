@@ -1,0 +1,106 @@
+# =============================================================================
+# MockMentorBiz — Hub docker-compose  (for recipients / deployment)
+#
+# Usage (only one step):
+#   docker compose -f docker-compose.hub.yml up -d
+#
+# That's it. No source code, no SQL files, no build step needed.
+# All three images are pulled from Docker Hub:
+#
+#   gurru2006/mockmentorbiz-mysql:latest         – MySQL 8 with schema + seed baked in
+#   gurru2006/mockmentorbiz-backend:latest       – FastAPI backend
+#   gurru2006/mockmentorbiz-frontend-prod:latest – nginx serving the built React SPA
+#
+# Once running, open http://localhost in your browser.
+#
+# The database schema and all user accounts are initialised automatically on
+# the very first start. Subsequent restarts reuse the persistent volume and
+# do NOT re-run the init scripts (MySQL behaviour).
+#
+# Optional: place a .env file next to this file to override API keys
+# (GROQ_API_KEY, ELEVENLABS_API_KEY, etc.). The app works without it but
+# AI features (question generation, evaluation, TTS) will be disabled.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # MySQL 8  — schema + seed data baked into the image
+  # ---------------------------------------------------------------------------
+  mysql:
+    image: gurru2006/mockmentorbiz-mysql:latest
+    container_name: mockmentorbiz-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: mmb_root
+      MYSQL_DATABASE: mockmentorbiz
+      MYSQL_USER: mmb_user
+      MYSQL_PASSWORD: mmb_pass
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - mockmentorbiz-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "mmb_user", "-pmmb_pass"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # FastAPI backend
+  # ---------------------------------------------------------------------------
+  backend:
+    image: gurru2006/mockmentorbiz-backend:latest
+    container_name: mockmentorbiz-backend
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false       # .env is optional — app still starts without it
+    environment:
+      DATABASE_URL: mysql+pymysql://mmb_user:mmb_pass@mysql:3306/mockmentorbiz
+      UPLOADS_DIR: /app/uploads
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+      # Fallback SECRET_KEY — override in .env for better security
+      SECRET_KEY: ${SECRET_KEY:-296dcfe87f74ca893b473fe1e4e8f93964ada2c40e628b7ab48700fcb9404663}
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - uploads_data:/app/uploads
+    networks:
+      - mockmentorbiz-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # nginx frontend — production build (React SPA + reverse proxy to backend)
+  # Opens on http://localhost (port 80)
+  # API calls to /api/ and /ws/ are proxied to the backend container internally.
+  # No VITE_* env vars needed — the API URL is baked in as relative paths at build time.
+  # ---------------------------------------------------------------------------
+  frontend:
+    image: gurru2006/mockmentorbiz-frontend-prod:latest
+    container_name: mockmentorbiz-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - mockmentorbiz-network
+
+volumes:
+  mysql_data:
+  uploads_data:
+
+networks:
+  mockmentorbiz-network:
+    driver: bridge

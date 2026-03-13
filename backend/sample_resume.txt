@@ -1,0 +1,4 @@
+John Doe
+Skills: Python, React, MySQL
+Project: Built a resume parser using FastAPI and pypdf
+Internship: Developed a dashboard in React and TypeScript

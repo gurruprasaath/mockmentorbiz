@@ -1,0 +1,57 @@
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+.venv
+venv
+backend/.venv
+*.egg-info
+
+# Node
+node_modules
+frontend/node_modules
+npm-debug.log*
+yarn-debug.log*
+
+# Build outputs (rebuilt inside Docker)
+frontend/dist
+frontend/.vite
+frontend/tsconfig.tsbuildinfo
+
+# User uploads (large files, not part of the source build context)
+backend/uploads/
+
+# Dev/test artifacts
+.git
+.github
+.gitignore
+.vscode
+.ruff_cache
+*.md
+SETUP.md
+README.md
+
+# Local env (never send to Docker daemon; env vars are passed via compose)
+.env
+.env.*
+!.env.example
+
+# Local scripts and logs
+deploy/
+scripts/
+*.log
+*.bat
+*.ps1
+*.sh
+pip_install*
+uvicorn_out.txt
+test_import.ps1
+wsl
+nul
+d.js
+
+# OS
+.DS_Store
+Thumbs.db

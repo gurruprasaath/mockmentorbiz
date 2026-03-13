@@ -1,0 +1,116 @@
+# =============================================================================
+# MockMentorBiz — Development docker-compose
+#
+# Usage:
+#   docker compose up --build          # start all services
+#   docker compose up --build backend  # backend only
+#
+# Services:
+#   mysql    – MySQL 8 (port 3307 on host to avoid conflict with local MySQL)
+#   backend  – FastAPI with uvicorn --reload (hot-reload via bind mount)
+#   frontend – Vite dev server (hot-reload via bind mount)
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # MySQL 8
+  # ---------------------------------------------------------------------------
+  mysql:
+    image: mysql:8.0
+    container_name: mockmentorbiz-mysql
+    restart: unless-stopped
+    environment:
+      # These are hardcoded here so they are always consistent with DATABASE_URL
+      # below regardless of what MYSQL_USER / MYSQL_PASSWORD are set to in .env
+      # (which point to a local Windows MySQL, not the container).
+      MYSQL_ROOT_PASSWORD: mmb_root
+      MYSQL_DATABASE: mockmentorbiz
+      MYSQL_USER: mmb_user
+      MYSQL_PASSWORD: mmb_pass
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./database/seed_users.sql:/docker-entrypoint-initdb.d/02_seed_users.sql:ro
+    networks:
+      - mockmentorbiz-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "mmb_user", "-pmmb_pass"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # FastAPI backend (dev — hot reload)
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      target: backend
+    container_name: mockmentorbiz-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Always use the container-internal credentials, never the host .env ones
+      DATABASE_URL: mysql+pymysql://mmb_user:mmb_pass@mysql:3306/mockmentorbiz
+      UPLOADS_DIR: /app/uploads
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      # Bind-mount source for hot-reload
+      - ./backend:/app
+      # Persist uploads across container restarts
+      - uploads_data:/app/uploads
+    networks:
+      - mockmentorbiz-network
+    # Override CMD to enable uvicorn --reload in dev
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Vite frontend dev server (hot reload)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      target: deps-frontend
+    container_name: mockmentorbiz-frontend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Point frontend at the backend container in Docker network
+      VITE_API_BASE_URL: http://localhost:8000
+      VITE_WS_BASE_URL: ws://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      # Bind-mount source for hot-reload; keep container node_modules
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - mockmentorbiz-network
+    working_dir: /app
+    command: npx vite --host 0.0.0.0 --port 5173
+
+volumes:
+  mysql_data:
+  uploads_data:
+
+networks:
+  mockmentorbiz-network:
+    driver: bridge
